@@ -736,12 +736,17 @@ export class CosmosDbTool implements INodeType {
 			);
 		}
 
-		const embeddings = (await this.getInputConnectionData(NodeConnectionTypes.AiEmbedding, 0)) as
-			| IEmbeddingModel
-			| undefined;
-		const reranker = (await this.getInputConnectionData(NodeConnectionTypes.AiReranker, 0)) as
-			| IRerankerModel
-			| undefined;
+		const isHybrid = operation === 'hybridSearch';
+		const embeddings = isHybrid
+			? ((await this.getInputConnectionData(NodeConnectionTypes.AiEmbedding, 0)) as
+					| IEmbeddingModel
+					| undefined)
+			: undefined;
+		const reranker = isHybrid
+			? ((await this.getInputConnectionData(NodeConnectionTypes.AiReranker, 0)) as
+					| IRerankerModel
+					| undefined)
+			: undefined;
 
 		if (operation === 'hybridSearch' && !embeddings) {
 			throw new NodeOperationError(

@@ -646,7 +646,7 @@ export class CosmosDbHybridSearchTool implements INodeType {
 				name: string;
 				description: string;
 				schema: unknown;
-				func: (input: { vector: string; fullText: string }) => Promise<string>;
+				func: (input: { vector?: string; fullText?: string; input?: string }) => Promise<string>;
 			}) => object;
 		};
 
@@ -667,10 +667,20 @@ export class CosmosDbHybridSearchTool implements INodeType {
 						description:
 							'Up to 5 space-separated keywords for full-text keyword search (e.g. "smart card register CCMR access")',
 					},
+					input: {
+						type: 'string',
+						description:
+							'Optional single query used for both vector and full-text search when vector/fullText are not provided',
+					},
 				},
-				required: ['vector', 'fullText'],
 			},
-			func: async ({ vector, fullText }: { vector: string; fullText: string }): Promise<string> => {
+			func: async (args: { vector?: string; fullText?: string; input?: string }): Promise<string> => {
+				const legacy = (args.input ?? '').trim();
+				const vector = (args.vector ?? '').trim() || legacy || (args.fullText ?? '').trim();
+				const fullText = (args.fullText ?? '').trim() || legacy || vector;
+				if (!vector) {
+					return JSON.stringify({ error: 'Provide "vector" and "fullText" query strings.' });
+				}
 				// Track tool invocation input in n8n execution data
 				const { index } = context.addInputData(NodeConnectionTypes.AiTool, [
 					[{ json: { vectorQuery: vector, fullTextQuery: fullText } }],

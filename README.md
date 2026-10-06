@@ -395,6 +395,12 @@ You can also create containers with the proper indexing policies directly using 
 - Check that documents have the expected full-text and vector fields, or set the hybrid search field names explicitly
 - Ensure an embedding model is connected
 
+**"Node does not have input of type" when running Cosmos DB Tool**
+
+- Newer n8n versions (seen on 2.41.5) reject requests for connection inputs a node does not declare
+- The Embeddings and Reranker inputs only exist when the operation is Hybrid Search, so Cosmos DB Tool now requests them only for that operation
+- Update to the latest version of this package if you see this error on Select, Insert or other non-hybrid operations
+
 ---
 
 ## Requirements
