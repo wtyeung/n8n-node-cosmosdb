@@ -407,7 +407,7 @@ You can also create containers with the proper indexing policies directly using 
 
 - [Azure Cosmos DB Documentation](https://learn.microsoft.com/en-us/azure/cosmos-db/)
 - [n8n Documentation](https://docs.n8n.io/)
-- [Report Issues](https://github.com/boazlai/n8n-node-cosmosdb/issues)
+- [Report Issues](https://github.com/wtyeung/n8n-node-cosmosdb/issues)
 
 ## License
 
