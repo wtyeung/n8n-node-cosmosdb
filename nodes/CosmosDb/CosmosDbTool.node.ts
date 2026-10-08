@@ -816,16 +816,9 @@ export class CosmosDbTool implements INodeType {
 				? manualToolDescription.trim()
 				: operation === 'hybridSearch'
 					? `Search Azure Cosmos DB container "${containerName}" in database "${databaseName}" using hybrid full-text and vector search. ` +
-						`Input MUST be a JSON string with these fields: ` +
-						`"query" (string, required: natural-language phrase used for semantic vector embedding search), ` +
-						`"keyword" (string, required: space-separated words used for full-text RRF ranking), ` +
-						`"topK" (number, optional: max results, default ${topK}). ` +
-						`Example: {"query":"equipment list for imaging lab","keyword":"imaging equipment microscope","topK":5}`
+						`Provide "query" (natural-language phrase for semantic vector search) and "keyword" (space-separated words for full-text ranking); "topK" is optional (default ${topK}).`
 					: `Query Azure Cosmos DB container "${containerName}" in database "${databaseName}" using SQL select. ` +
-						`Input MUST be a JSON string with fields: ` +
-						`"sqlQuery" (string, optional: SQL query, default "SELECT * FROM c"), ` +
-						`"rerankQuery" (string, optional: phrase to rerank results). ` +
-						`Example: {"sqlQuery":"SELECT * FROM c WHERE c.status = 'active'","rerankQuery":"most recent items"}`;
+						`"sqlQuery" is optional (defaults to the configured query); "rerankQuery" optionally reranks results.`;
 		const executeTool = async (input: string | Record<string, unknown>): Promise<string> => {
 			try {
 				let parsed: Record<string, unknown> = {};
@@ -991,23 +984,71 @@ export class CosmosDbTool implements INodeType {
 
 		const toolName = nodeNameToToolName(this.getNode());
 
-		const { DynamicTool } = require('@langchain/core/tools') as {
-			DynamicTool: new (config: {
+		const { DynamicStructuredTool } = require('@langchain/core/tools') as {
+			DynamicStructuredTool: new (config: {
 				name: string;
 				description: string;
-				func: (input: string) => Promise<string>;
+				schema: unknown;
+				func: (input: Record<string, unknown> | string) => Promise<string>;
 			}) => { name: string };
 		};
 
-		const tool = new DynamicTool({
+		const tool = new DynamicStructuredTool({
 			name: toolName,
 			description: toolDescription,
-			func: async (rawInput: string): Promise<string> => {
+			// Plain JSON Schema (type: object) — required by OpenAI function calling
+			schema:
+				operation === 'hybridSearch'
+					? {
+							type: 'object',
+							properties: {
+								query: {
+									type: 'string',
+									description: 'Natural-language phrase used for semantic vector embedding search',
+								},
+								keyword: {
+									type: 'string',
+									description: 'Space-separated words used for full-text RRF ranking',
+								},
+								topK: { type: 'number', description: `Max results (default ${topK})` },
+								partitionKeyValue: {
+									type: 'string',
+									description: 'Optional partition key value to filter by',
+								},
+								additionalFilters: {
+									type: 'string',
+									description: 'Optional extra SQL WHERE condition, e.g. c.status = "active"',
+								},
+								fieldsToReturn: {
+									type: 'string',
+									description: 'Optional comma-separated fields to return',
+								},
+							},
+						}
+					: {
+							type: 'object',
+							properties: {
+								sqlQuery: {
+									type: 'string',
+									description:
+										'Optional Cosmos DB SQL query. Omit to use the query configured on the node.',
+								},
+								rerankQuery: {
+									type: 'string',
+									description: 'Optional phrase used to rerank results',
+								},
+							},
+						},
+			func: async (rawInput: Record<string, unknown> | string): Promise<string> => {
 				let parsed: Record<string, unknown> = {};
-				try {
-					parsed = JSON.parse(rawInput) as Record<string, unknown>;
-				} catch {
-					parsed = operation === 'hybridSearch' ? { query: rawInput } : { sqlQuery: rawInput };
+				if (typeof rawInput === 'string') {
+					try {
+						parsed = JSON.parse(rawInput) as Record<string, unknown>;
+					} catch {
+						parsed = operation === 'hybridSearch' ? { query: rawInput } : { sqlQuery: rawInput };
+					}
+				} else {
+					parsed = rawInput ?? {};
 				}
 				const inputJson: IDataObject = parsed as IDataObject;
 				const { index } = this.addInputData(NodeConnectionTypes.AiTool, [[{ json: inputJson }]]);
@@ -1029,10 +1070,42 @@ export class CosmosDbTool implements INodeType {
 		return { response: tool };
 	}
 
+	/**
+	 * Called by n8n's engine when an AI agent invokes this tool via EngineRequest.
+	 * Tool arguments arrive as getInputData()[0].json; reuse the supplyData tool so both paths behave identically.
+	 */
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-		throw new NodeOperationError(
-			this.getNode(),
-			'Cosmos DB Tool only supports the AI tool bus. Connect it to an AI Agent via the Tool output.',
-		);
+		const json = (this.getInputData()[0]?.json ?? {}) as Record<string, unknown>;
+		const { input, ...fields } = json;
+		const isHybrid = this.getNodeParameter('operation', 0, 'select') === 'hybridSearch';
+		const args: Record<string, unknown> =
+			typeof input === 'string' && !Object.keys(fields).length
+				? isHybrid
+					? { query: input }
+					: { sqlQuery: input }
+				: { ...fields };
+
+		const context = new Proxy(this, {
+			get: (target, prop) => {
+				if (prop === 'addInputData') return () => ({ index: 0 });
+				if (prop === 'addOutputData') return () => undefined;
+				const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+				return typeof value === 'function' ? value.bind(target) : value;
+			},
+		}) as unknown as ISupplyDataFunctions;
+
+		const { response } = await CosmosDbTool.prototype.supplyData.call(context, 0);
+		const result = await (
+			response as { invoke: (input: Record<string, unknown> | string) => Promise<string> }
+		).invoke(args);
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(result);
+		} catch {
+			parsed = { response: result };
+		}
+		const docs = Array.isArray(parsed) ? parsed : [parsed];
+		return [docs.map((doc) => ({ json: doc as IDataObject }))];
 	}
 }
